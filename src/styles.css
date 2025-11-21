@@ -5,3 +5,6 @@
 tr[data-group-header] {
   height: 48px;
 }
+.drop-indicator-row {
+  border-top: 2px solid #1677ff !important;
+}

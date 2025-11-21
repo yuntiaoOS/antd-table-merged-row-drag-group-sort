@@ -1,5 +1,5 @@
 import React from "react";
-import GroupedRowTable from "./GroupedRowTable";
+// import GroupedRowTable from "./GroupedRowTable";
 import GroupDragTable from "./GroupDragTable";
 
 export default function App() {

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useState, useMemo, useContext, createContext } from "react";
 import { Table } from "antd";
 import type { ColumnsType } from "antd";
@@ -313,15 +314,15 @@ const TableWithMultiRowDrag: React.FC = () => {
       title: "排序",
       width: 60,
       align: "center",
-      render: (_, record) => (record.groupSize ? <DragHandle /> : null),
-      onCell: (record) => ({ rowSpan: record.groupSize || 0 }),
+      render: (_, record: any) => (record.groupSize ? <DragHandle /> : null),
+      onCell: (record: any) => ({ rowSpan: record.groupSize || 0 }),
     },
     {
       title: "分组",
       dataIndex: "category",
       width: 100,
       align: "center",
-      onCell: (record) => ({ rowSpan: record.groupSize || 0 }),
+      onCell: (record: any) => ({ rowSpan: record.groupSize || 0 }),
     },
     { title: "产品名称", dataIndex: "name" },
     { title: "数量", dataIndex: "count", width: 80 },
@@ -330,6 +331,7 @@ const TableWithMultiRowDrag: React.FC = () => {
   return (
     <div style={{ padding: 20 }}>
       <h3>多行合并整组拖动 (完美版)</h3>
+
       <DndContext
         sensors={sensors}
         modifiers={[restrictToVerticalAxis]}
@@ -360,7 +362,6 @@ const TableWithMultiRowDrag: React.FC = () => {
           />
         </SortableContext>
 
-        {/* 渲染替身 */}
         {createPortal(
           <DragOverlay
             dropAnimation={{

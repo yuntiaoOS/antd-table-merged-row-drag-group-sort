@@ -8,3 +8,61 @@ tr[data-group-header] {
 .drop-indicator-row {
   border-top: 2px solid #1677ff !important;
 }
+/* ================================ */
+/* 强化视觉效果（建议直接覆盖）     */
+/* ================================ */
+
+/* 1. Hover 行更突出 */
+.ant-table-tbody > tr:hover td {
+  background: #f5faff !important;
+  transition: all 0.25s ease;
+}
+
+/* 2. 被拖起的行（Overlay 不会影响这里） */
+tr[data-dragging="true"] td {
+  background: #e6f4ff !important;
+  box-shadow: inset 0 0 0 2px #91caff;
+  transition: all 0.2s ease;
+}
+
+/* 3. 整个组被拖动时，所有行都突出 */
+tr.group-dragging td {
+  background: #e8f3ff !important;
+  box-shadow: inset 0 0 0 2px #1677ff;
+  transition: all 0.2s ease;
+}
+
+/* 4. Drop 指示线：强化为蓝色粗线 + 动画 */
+.drop-indicator-row td {
+  border-top: 3px solid #1677ff !important;
+  animation: dropBlink 0.4s linear infinite alternate;
+}
+
+@keyframes dropBlink {
+  0% {
+    border-color: #1677ff;
+  }
+  100% {
+    border-color: #69c0ff;
+  }
+}
+
+/* 5. Overlay：柔和阴影 + 轻微缩放 */
+.dnd-overlay-animate {
+  transform: scale(1.02);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+/* 6. 拖拽手柄 hover 高亮 */
+.drag-handle {
+  cursor: grab;
+  color: #1677ff;
+  transition: all 0.2s ease;
+}
+
+.drag-handle:hover {
+  transform: scale(1.15);
+  color: #0958d9;
+}

@@ -166,6 +166,7 @@ const DragHandle: React.FC = () => {
   const ctx = useContext(RowContext);
   return (
     <MenuOutlined
+      className="drag-handle"
       ref={ctx.setActivatorNodeRef as any}
       {...ctx.listeners}
       style={{ cursor: ctx.isDragging ? "grabbing" : "grab", color: "#1890ff" }}
@@ -230,6 +231,13 @@ const DraggableRow: React.FC<DraggableRowProps> = ({
         ref={isGroupHeader ? setNodeRef : undefined}
         {...(isGroupHeader ? attributes : {})}
         {...restProps}
+        data-dragging={isDragging ? "true" : "false"}
+        className={[
+          restProps.className,
+          activeId === `group:${record.groupKey}` ? "group-dragging" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         style={style}
       />
     </RowContext.Provider>
@@ -282,7 +290,12 @@ const DragOverlayContent: React.FC<{
                     borderRight: "1px solid #f0f0f0",
                   }}
                 >
-                  {i === 0 && <MenuOutlined style={{ color: "#1890ff" }} />}
+                  {i === 0 && (
+                    <MenuOutlined
+                      className="drag-handle"
+                      style={{ color: "#1890ff" }}
+                    />
+                  )}
                 </td>
                 <td
                   style={{
@@ -334,7 +347,10 @@ const DragOverlayContent: React.FC<{
                   borderRight: "1px solid #f0f0f0",
                 }}
               >
-                <MenuOutlined style={{ color: "#1890ff" }} />
+                <MenuOutlined
+                  className="drag-handle"
+                  style={{ color: "#1890ff" }}
+                />
               </td>
               <td
                 style={{
@@ -576,6 +592,7 @@ const TableWithGroupAndRowDrag: React.FC = () => {
 
         {createPortal(
           <DragOverlay
+            className="dnd-overlay-animate"
             dropAnimation={{
               sideEffects: defaultDropAnimationSideEffects({
                 styles: { active: { opacity: "0.0" } },

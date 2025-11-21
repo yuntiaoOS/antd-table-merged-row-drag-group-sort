@@ -66,3 +66,12 @@ tr.group-dragging td {
   transform: scale(1.15);
   color: #0958d9;
 }
+
+.ant-table-tbody > tr {
+  overflow: hidden;
+}
+
+.group-dragging td {
+  background: rgba(24, 144, 255, 0.04) !important;
+  border-left: 4px solid rgba(24, 144, 255, 0.18);
+}

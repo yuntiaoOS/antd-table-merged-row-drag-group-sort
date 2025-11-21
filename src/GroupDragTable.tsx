@@ -1,7 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useContext, createContext } from "react";
 import { Table } from "antd";
-import type { ColumnsType } from "antd";
 import { MenuOutlined } from "@ant-design/icons";
 import {
   DndContext,
@@ -11,8 +10,8 @@ import {
   useSensor,
   useSensors,
   PointerSensor,
-  defaultDropAnimationSideEffects,
   DragMoveEvent,
+  defaultDropAnimationSideEffects,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -24,30 +23,18 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { createPortal } from "react-dom";
 
-/**
- * 说明：
- * - 每个“组头”都有 groupKey 和 groupSize（仅组头行含 groupSize）
- * - 每个行有唯一 key（这里用 key 字段）
- * - sort 字段会在拖动结束时按最终平铺顺序重写（0,1,2,...）
- *
- * ID 约定（用于 dnd-kit items）：
- * - 组头： "group:GROUPKEY"
- * - 行：   "row:ROWKEY"
- *
- * 这样 collisions 的 over 就会回传我们期望的 id。
- */
-
-// ---------- 示例数据 ----------
+/* ============ 数据结构 ============ */
 interface RowItem {
   key: string;
   groupKey: string;
-  groupSize?: number; // 仅组头行存在，否则 undefined
+  groupSize?: number;
   category: string;
   name: string;
   count: number;
-  sort: number; // 必须存在
+  sort: number; // must exist, initialized 1,2,3...
 }
 
+/* 初始化示例数据（sort 从 1 开始） */
 const initialData: RowItem[] = [
   {
     key: "1-1",
@@ -56,7 +43,7 @@ const initialData: RowItem[] = [
     category: "A",
     name: "产品 A1",
     count: 10,
-    sort: 0,
+    sort: 1,
   },
   {
     key: "1-2",
@@ -64,7 +51,7 @@ const initialData: RowItem[] = [
     category: "A",
     name: "产品 A2",
     count: 20,
-    sort: 1,
+    sort: 2,
   },
   {
     key: "1-3",
@@ -72,7 +59,7 @@ const initialData: RowItem[] = [
     category: "A",
     name: "产品 A3",
     count: 30,
-    sort: 2,
+    sort: 3,
   },
 
   {
@@ -82,7 +69,7 @@ const initialData: RowItem[] = [
     category: "B",
     name: "产品 B1",
     count: 5,
-    sort: 3,
+    sort: 4,
   },
   {
     key: "2-2",
@@ -90,7 +77,7 @@ const initialData: RowItem[] = [
     category: "B",
     name: "产品 B2",
     count: 15,
-    sort: 4,
+    sort: 5,
   },
 
   {
@@ -100,103 +87,96 @@ const initialData: RowItem[] = [
     category: "C",
     name: "产品 C1",
     count: 40,
-    sort: 5,
+    sort: 6,
   },
 ];
 
-// ---------- helpers ----------
-const groupHeaders = (data: RowItem[]) =>
-  data.filter((r) => r.groupSize !== undefined).map((h) => h.groupKey);
-
-// 将数据按 groupKey 分块并保留顺序
+/* ============ helpers ============ */
 const buildGroups = (data: RowItem[]) => {
   const map = new Map<string, RowItem[]>();
-  // data assumed sorted by sort
   data.forEach((r) => {
     if (!map.has(r.groupKey)) map.set(r.groupKey, []);
     map.get(r.groupKey)!.push(r);
   });
+  // preserve order by smallest sort of group
   return Array.from(map.entries()).map(([groupKey, rows]) => ({
     groupKey,
-    rows,
+    rows: rows.slice().sort((a, b) => a.sort - b.sort),
   }));
 };
 
-// flatten groups -> data array and reassign sort
 const flattenAndResort = (groups: { groupKey: string; rows: RowItem[] }[]) => {
-  let idx = 0;
-  return groups.flatMap((g) =>
-    g.rows.map((r) => ({
-      ...r,
-      sort: idx++,
-    }))
+  // produce new array and ensure sort values preserved where not changed
+  return groups.flatMap((g) => g.rows);
+};
+
+/* 找 prev/next sort value (strict) */
+const findPrevSort = (data: RowItem[], sort: number) => {
+  const arr = data.filter((i) => i.sort < sort).sort((a, b) => a.sort - b.sort);
+  if (arr.length === 0) return null;
+  return arr[arr.length - 1].sort;
+};
+const findNextSort = (data: RowItem[], sort: number) => {
+  const arr = data.filter((i) => i.sort > sort).sort((a, b) => a.sort - b.sort);
+  if (arr.length === 0) return null;
+  return arr[0].sort;
+};
+
+/* update single row sort */
+const updateRowSort = (data: RowItem[], rowKey: string, newSort: number) =>
+  data.map((r) => (r.key === rowKey ? { ...r, sort: newSort } : r));
+
+/* update group sort: set group's rows to up + JQ * index (index from 1..rowNum) */
+const updateGroupSort = (
+  data: RowItem[],
+  groupKey: string,
+  up: number,
+  JQ: number
+) => {
+  let idx = 1;
+  return data.map((r) =>
+    r.groupKey === groupKey ? { ...r, sort: up + JQ * idx++ } : r
   );
 };
 
-// 自动滚动辅助函数
-const autoScroll = (e: DragMoveEvent) => {
-  const threshold = 80; // 离顶部/底部多少像素开始滚动
-  const speed = 12; // 滚动速度 px/frame
-
-  const table = document.querySelector(".ant-table-body");
-  if (!table) return;
-
-  const rect = table.getBoundingClientRect();
-  const y = e.delta.y;
-
-  // 鼠标位置（默认 DnD 无法直接获取，这里用 transform delta 模拟）
-  const mouseY = e.activatorEvent.clientY;
-
-  if (mouseY < rect.top + threshold) {
-    table.scrollTop -= speed;
-  } else if (mouseY > rect.bottom - threshold) {
-    table.scrollTop += speed;
-  }
-};
-
-// ---------- RowContext & DragHandle ----------
-interface RowCtx {
-  setActivatorNodeRef?: (el: HTMLElement | null) => void;
-  listeners?: any;
-  isDragging?: boolean;
-}
-const RowContext = createContext<RowCtx>({});
+/* ============ RowContext & DragHandle ============ */
+const RowContext = createContext({
+  setActivatorNodeRef: undefined,
+  listeners: undefined,
+  isDragging: false,
+});
 
 const DragHandle: React.FC = () => {
-  const ctx = useContext(RowContext);
+  const ctx: any = useContext(RowContext);
   return (
-    <MenuOutlined
+    <div
+      style={{
+        width: 28,
+        height: 28,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 6,
+        background: "#fafafa",
+        border: "1px solid #e8e8e8",
+      }}
       className="drag-handle"
-      ref={ctx.setActivatorNodeRef as any}
-      {...ctx.listeners}
-      style={{ cursor: ctx.isDragging ? "grabbing" : "grab", color: "#1890ff" }}
-    />
+    >
+      <MenuOutlined ref={ctx.setActivatorNodeRef as any} {...ctx.listeners} />
+    </div>
   );
 };
 
-// ---------- DraggableRow (用于 Table components.body.row) ----------
-interface DraggableRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
-  record: RowItem;
-  "data-row-key": string;
-  activeId: string | null;
-}
-const DraggableRow: React.FC<DraggableRowProps> = ({
-  record,
-  activeId,
-  ...restProps
-}) => {
+/* ============ DraggableRow (Table body row) ============ */
+const DraggableRow = ({ record, activeId, ...restProps }: any) => {
   if (!record) return <tr {...restProps} />;
 
-  // 是组头的判定（只有组头行含 groupSize 字段）
   const isGroupHeader = record.groupSize !== undefined;
-  const activeIsGroup = activeId?.startsWith("group:");
-  const activeIsRow = activeId?.startsWith("row:");
-
-  // useSortable：如果是组头，启用 sortable id=group:groupKey；否则启用 row:id 以支持单行拖动
   const sortableId = isGroupHeader
     ? `group:${record.groupKey}`
     : `row:${record.key}`;
-  // 禁用行为：如果是组头就启用 group 拖动；如果是普通行，启用 row 拖动
+
+  const sortable = useSortable({ id: sortableId, disabled: false });
   const {
     attributes,
     listeners,
@@ -205,18 +185,19 @@ const DraggableRow: React.FC<DraggableRowProps> = ({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: sortableId, disabled: false });
+  } = sortable;
 
-  // 当某组正在拖动（group拖动），整组在原表格透明占位，单行拖动时只隐藏被拖的行
-  const isCurrentGroupDragging = activeId === `group:${record.groupKey}`;
+  // 修复点：判断当前行是否属于正在拖动的组（无论是否是组头行）
+  const isCurrentGroupDragging =
+    activeId &&
+    activeId.startsWith("group:") &&
+    record.groupKey === activeId.replace("group:", "");
   const isCurrentRowDragging = activeId === `row:${record.key}`;
 
   const style: React.CSSProperties = {
     ...restProps.style,
-    // 组拖动时，该组所有行都透明占位（占位但不可见）
-    opacity: isCurrentGroupDragging ? 0 : isCurrentRowDragging ? 0 : 1,
-    transition,
-    // 对于组头我们可以保留 transform（不用于移动视觉，只让 dnd-kit 计算）
+    opacity: isCurrentGroupDragging || isCurrentRowDragging ? 0 : 1,
+    transition: transition || "all 120ms ease",
     transform: isGroupHeader ? CSS.Translate.toString(transform) : undefined,
   };
 
@@ -231,39 +212,33 @@ const DraggableRow: React.FC<DraggableRowProps> = ({
         ref={isGroupHeader ? setNodeRef : undefined}
         {...(isGroupHeader ? attributes : {})}
         {...restProps}
-        data-dragging={isDragging ? "true" : "false"}
-        className={[
-          restProps.className,
-          activeId === `group:${record.groupKey}` ? "group-dragging" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
+        className={`${restProps.className || ""} ${
+          isCurrentGroupDragging ? "group-dragging" : ""
+        }`}
         style={style}
       />
     </RowContext.Provider>
   );
 };
 
-// ---------- Overlay 渲染：整组或单行的镜像 ----------
-// 如果 activeId 是 group:... 渲染整组；如果是 row:... 渲染那一行
-const DragOverlayContent: React.FC<{
+/* ============ DragOverlay UI ============ */
+const DragOverlayContent = ({
+  activeId,
+  data,
+}: {
   activeId: string | null;
   data: RowItem[];
-}> = ({ activeId, data }) => {
+}) => {
   if (!activeId) return null;
   if (activeId.startsWith("group:")) {
-    const groupKey = activeId.slice("group:".length);
+    const groupKey = activeId.replace("group:", "");
     const rows = data
       .filter((r) => r.groupKey === groupKey)
       .sort((a, b) => a.sort - b.sort);
     return (
       <div
-        style={{
-          background: "#fff",
-          boxShadow: "0 8px 20px rgba(0,0,0,0.2)",
-          border: "1px solid #e8e8e8",
-          width: 800,
-        }}
+        className="dnd-overlay-animate"
+        style={{ background: "#fff", border: "1px solid #e8e8e8", width: 900 }}
       >
         <table
           style={{
@@ -274,15 +249,15 @@ const DragOverlayContent: React.FC<{
         >
           <colgroup>
             <col style={{ width: 60 }} />
-            <col style={{ width: 120 }} />
+            <col style={{ width: 140 }} />
             <col />
-            <col style={{ width: 100 }} />
+            <col style={{ width: 120 }} />
           </colgroup>
           <tbody>
             {rows.map((r, i) => (
               <tr
                 key={r.key}
-                style={{ height: 52, borderBottom: "1px solid #f0f0f0" }}
+                style={{ height: 56, borderBottom: "1px solid #f0f0f0" }}
               >
                 <td
                   style={{
@@ -290,12 +265,7 @@ const DragOverlayContent: React.FC<{
                     borderRight: "1px solid #f0f0f0",
                   }}
                 >
-                  {i === 0 && (
-                    <MenuOutlined
-                      className="drag-handle"
-                      style={{ color: "#1890ff" }}
-                    />
-                  )}
+                  {i === 0 && <MenuOutlined style={{ color: "#1890ff" }} />}
                 </td>
                 <td
                   style={{
@@ -305,26 +275,22 @@ const DragOverlayContent: React.FC<{
                 >
                   {i === 0 && r.category}
                 </td>
-                <td style={{ padding: 12 }}>{r.name}</td>
-                <td style={{ padding: 12 }}>{r.count}</td>
+                <td style={{ padding: 14 }}>{r.name}</td>
+                <td style={{ padding: 14 }}>{r.count}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     );
-  } else if (activeId.startsWith("row:")) {
-    const rowKey = activeId.slice("row:".length);
+  } else {
+    const rowKey = activeId.replace("row:", "");
     const r = data.find((x) => x.key === rowKey);
     if (!r) return null;
     return (
       <div
-        style={{
-          background: "#fff",
-          boxShadow: "0 8px 20px rgba(0,0,0,0.2)",
-          border: "1px solid #e8e8e8",
-          width: 800,
-        }}
+        className="dnd-overlay-animate"
+        style={{ background: "#fff", border: "1px solid #e8e8e8", width: 900 }}
       >
         <table
           style={{
@@ -335,22 +301,19 @@ const DragOverlayContent: React.FC<{
         >
           <colgroup>
             <col style={{ width: 60 }} />
-            <col style={{ width: 120 }} />
+            <col style={{ width: 140 }} />
             <col />
-            <col style={{ width: 100 }} />
+            <col style={{ width: 120 }} />
           </colgroup>
           <tbody>
-            <tr style={{ height: 52, borderBottom: "1px solid #f0f0f0" }}>
+            <tr style={{ height: 56, borderBottom: "1px solid #f0f0f0" }}>
               <td
                 style={{
                   textAlign: "center",
                   borderRight: "1px solid #f0f0f0",
                 }}
               >
-                <MenuOutlined
-                  className="drag-handle"
-                  style={{ color: "#1890ff" }}
-                />
+                <MenuOutlined style={{ color: "#1890ff" }} />
               </td>
               <td
                 style={{
@@ -360,164 +323,252 @@ const DragOverlayContent: React.FC<{
               >
                 {r.category}
               </td>
-              <td style={{ padding: 12 }}>{r.name}</td>
-              <td style={{ padding: 12 }}>{r.count}</td>
+              <td style={{ padding: 14 }}>{r.name}</td>
+              <td style={{ padding: 14 }}>{r.count}</td>
             </tr>
           </tbody>
         </table>
       </div>
     );
   }
-  return null;
 };
 
-// ---------- Main component ----------
+/* ============ Sort calculation per your spec ============ */
+/**
+ * activeId/overId are id strings like "group:groupKey" or "row:rowKey"
+ * sortedData is current data (sorted by sort)
+ * This function returns a new array where only the active row(s) sort are changed.
+ */
+function computeNewSorts(
+  sortedData: RowItem[],
+  activeId: string,
+  overId: string
+) {
+  // helper to get numeric sort for an id (row or group head)
+  const getSortForId = (id: string, isTargetingEnd = false) => {
+    if (id.startsWith("row:")) {
+      const k = id.slice("row:".length);
+      const r = sortedData.find((x) => x.key === k);
+      return r ? r.sort : null;
+    } else if (id.startsWith("group:")) {
+      const gk = id.slice("group:".length);
+      const rows = sortedData
+        .filter((x) => x.groupKey === gk)
+        .sort((a, b) => a.sort - b.sort);
+      if (rows.length === 0) return null;
+      return isTargetingEnd ? rows[rows.length - 1].sort : rows[0].sort;
+    }
+    return null;
+  };
+
+  // helper to find prev/next sort for a given sort number
+  const findPrev = (s: number | null) =>
+    s == null ? null : findPrevSort(sortedData, s);
+  const findNext = (s: number | null) =>
+    s == null ? null : findNextSort(sortedData, s);
+
+  const activeIsGroup = activeId.startsWith("group:");
+  const activeIsRow = activeId.startsWith("row:");
+  const overIsGroup = overId.startsWith("group:");
+  const overIsRow = overId.startsWith("row:");
+
+  // 1. 获取 active 项的 sort (组取第一行)
+  const activeSort = getSortForId(activeId, false); // 活动项总是取第一行的 sort
+
+  // 2. 先获取 over 项的 sort 作为基准来判断方向 (组先取第一行)
+  const overSortBase = getSortForId(overId, false);
+
+  // guard
+  if (activeSort == null || overSortBase == null) return sortedData;
+
+  // 3. 使用基准 sort 值判断方向
+  const isUp = activeSort > overSortBase;
+  const isDown = activeSort < overSortBase;
+
+  // 4. 根据方向，重新获取 over 项的正确 sort 值
+  //    - 如果是向上拖动，over 项的 sort 应该是它的起始位置（第一行）
+  //    - 如果是向下拖动，over 项的 sort 应该是它的结束位置（最后一行）
+  //    - 但对于单行，这两个值是一样的，所以逻辑也成立。
+  const overSort = getSortForId(overId, isDown); // ✅ 根据方向决定取组的哪一端
+
+  // clone data to mutate sorts for the active only
+  let newData = sortedData.map((r) => ({ ...r }));
+
+  // ---------- Row case ----------
+  if (activeIsRow && !activeIsGroup) {
+    const activeKey = activeId.slice("row:".length);
+
+    if (isUp) {
+      // up -> over is down
+      const down = overSort;
+      const up = findPrev(down) ?? 0;
+      const newSort = (down - up) / 2 + up;
+      newData = updateRowSort(newData, activeKey, newSort);
+      return newData;
+    }
+
+    if (isDown) {
+      // down -> over is up
+      const up = overSort;
+      const maybeNext = findNext(up);
+      const down = maybeNext ?? up + 2;
+      const newSort = up + (down - up) / 2;
+      newData = updateRowSort(newData, activeKey, newSort);
+      return newData;
+    }
+
+    return newData;
+  }
+
+  // ---------- Group case ----------
+  if (activeIsGroup) {
+    const gk = activeId.slice("group:".length);
+    const rows = sortedData
+      .filter((r) => r.groupKey === gk)
+      .sort((a, b) => a.sort - b.sort);
+    const rowNum = rows.length;
+
+    if (isUp) {
+      // up -> over is down
+      const down = overSort;
+      const up = findPrev(down) ?? 0;
+      const JQ = (down - up) / (rowNum + 1);
+      newData = updateGroupSort(newData, gk, up, JQ);
+      return newData;
+    }
+
+    if (isDown) {
+      const up = overSort;
+      const maybeNext = findNext(up);
+      const down = maybeNext ?? up + rowNum + 1;
+      const JQ = (down - up) / (rowNum + 1);
+      newData = updateGroupSort(newData, gk, up, JQ);
+      return newData;
+    }
+
+    return newData;
+  }
+
+  return newData;
+}
+
+/* ============ Main component ============ */
 const TableWithGroupAndRowDrag: React.FC = () => {
   const [dataSource, setDataSource] = useState<RowItem[]>(initialData);
   const [activeId, setActiveId] = useState<string | null>(null);
-
   const [indicatorPos, setIndicatorPos] = useState<{
     key: string;
     type: "before" | "after";
   } | null>(null);
 
-  // sortedData 按 sort 保证渲染顺序
   const sortedData = useMemo(
     () => [...dataSource].sort((a, b) => a.sort - b.sort),
     [dataSource]
   );
   const groups = useMemo(() => buildGroups(sortedData), [sortedData]);
 
-  // dnd-kit sensors
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
 
-  // items for SortableContext: include group ids and row ids (as used above)
   const sortableItems = useMemo(() => {
-    // We'll expose only group headers and row keys as items so collisions detect both types
     const groupIds = groups.map((g) => `group:${g.groupKey}`);
     const rowIds = sortedData.map((r) => `row:${r.key}`);
     return [...groupIds, ...rowIds];
   }, [groups, sortedData]);
 
-  // drag start: record active id
   const onDragStart = (e: DragStartEvent) => {
     setActiveId(String(e.active.id));
   };
 
-  // drag end: 重写数据结构：分4种情况
+  const onDragMove = (e: DragMoveEvent) => {
+    // auto scroll
+    try {
+      const tableEl = document.querySelector(
+        ".ant-table-body"
+      ) as HTMLElement | null;
+      if (tableEl && e.activatorEvent && (e.activatorEvent as any).clientY) {
+        const rect = tableEl.getBoundingClientRect();
+        const mouseY = (e.activatorEvent as any).clientY;
+        const threshold = 80;
+        const speed = 10;
+        if (mouseY < rect.top + threshold) tableEl.scrollTop -= speed;
+        else if (mouseY > rect.bottom - threshold) tableEl.scrollTop += speed;
+      }
+    } catch (err) {
+      // ignore
+    }
+
+    const overId = e.over?.id ? String(e.over.id) : null;
+    if (!overId) {
+      setIndicatorPos(null);
+      return;
+    }
+
+    // 当 overId 是组时，指示线应该显示在该组的最后一行下面
+    if (overId.startsWith("group:")) {
+      const gk = overId.slice("group:".length);
+      const rows = sortedData
+        .filter((r) => r.groupKey === gk)
+        .sort((a, b) => a.sort - b.sort);
+      if (rows.length > 0) {
+        const lastRowKey = rows[rows.length - 1].key;
+        setIndicatorPos({ key: lastRowKey, type: "after" }); // 显示在最后一行之后
+      }
+    } else {
+      // 单行情况不变
+      setIndicatorPos({ key: overId.replace("row:", ""), type: "before" });
+    }
+  };
+
+  const recomputeGroupSizes = (data: RowItem[]) => {
+    const groups = buildGroups(data);
+    return groups.flatMap((g) => {
+      const size = g.rows.length;
+      return g.rows.map((r, idx) => ({
+        ...r,
+        groupSize: idx === 0 ? size : 0, // 只有第一行显示 rowSpan
+      }));
+    });
+  };
+
   const onDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
+    setIndicatorPos(null);
     setActiveId(null);
-    if (!over) return;
+    if (!active || !over) return;
 
     const activeIdStr = String(active.id);
     const overIdStr = String(over.id);
     if (activeIdStr === overIdStr) return;
 
-    // active is group move
-    if (activeIdStr.startsWith("group:") && overIdStr.startsWith("group:")) {
-      const activeGroupKey = activeIdStr.slice("group:".length);
-      const overGroupKey = overIdStr.slice("group:".length);
-      // reorder groups: move activeGroup to position of overGroup
-      const headerOrder = groups.map((g) => g.groupKey);
-      const from = headerOrder.indexOf(activeGroupKey);
-      const to = headerOrder.indexOf(overGroupKey);
-      if (from === -1 || to === -1 || from === to) return;
-      const newHeaderOrder = arrayMove(headerOrder, from, to);
-      // rebuild groups in new order and flatten (preserve internal row order)
-      const newGroups = newHeaderOrder.map(
-        (gk) => groups.find((g) => g.groupKey === gk)!
-      );
-      const newData = flattenAndResort(newGroups);
-      setDataSource(newData);
-      return;
-    }
+    // compute new sorts based on your algorithm
+    const newData = computeNewSorts(sortedData, activeIdStr, overIdStr);
 
-    // active is row move
-    if (activeIdStr.startsWith("row:")) {
-      const rowKey = activeIdStr.slice("row:".length);
-
-      // case a: dropped on a group header -> append to that group (at end)
-      if (overIdStr.startsWith("group:")) {
-        const targetGroupKey = overIdStr.slice("group:".length);
-        // remove row from its old group and append to target group
-        const oldGroups = groups.map((g) => ({
-          groupKey: g.groupKey,
-          rows: [...g.rows],
-        }));
-        let moving: RowItem | undefined;
-        oldGroups.forEach((g) => {
-          const idx = g.rows.findIndex((r) => r.key === rowKey);
-          if (idx >= 0) moving = g.rows.splice(idx, 1)[0];
-        });
-        if (!moving) return;
-        // update moving's groupKey
-        moving.groupKey = targetGroupKey;
-        // append
-        const t = oldGroups.find((g) => g.groupKey === targetGroupKey)!;
-        t.rows.push(moving);
-        // flatten and resort
-        const newData = flattenAndResort(oldGroups);
-        setDataSource(newData);
-        return;
-      }
-
-      // case b: dropped on another row -> insert before/after depending on positions
-      if (overIdStr.startsWith("row:")) {
-        const targetRowKey = overIdStr.slice("row:".length);
-
-        // build modifiable groups
-        const oldGroups = groups.map((g) => ({
-          groupKey: g.groupKey,
-          rows: [...g.rows],
-        }));
-
-        // find source and target
-        let moving: RowItem | undefined;
-        for (const g of oldGroups) {
-          const idx = g.rows.findIndex((r) => r.key === rowKey);
-          if (idx >= 0) {
-            moving = g.rows.splice(idx, 1)[0];
-            break;
-          }
-        }
-        if (!moving) return;
-
-        // find target group & index
-        let placed = false;
-        for (const g of oldGroups) {
-          const idx = g.rows.findIndex((r) => r.key === targetRowKey);
-          if (idx >= 0) {
-            // insert before the target row (you can change behavior to insert after)
-            moving.groupKey = g.groupKey;
-            g.rows.splice(idx, 0, moving);
-            placed = true;
-            break;
-          }
-        }
-        if (!placed) {
-          // fallback append to last group
-          oldGroups[oldGroups.length - 1].rows.push(moving);
-        }
-        const newData = flattenAndResort(oldGroups);
-        setDataSource(newData);
-        return;
-      }
-    }
-
-    setIndicatorPos(null);
-    // other cases ignored
+    // after computing, we re-normalize sort values to prevent floating explosion:
+    // Optionally: we can sort by new sort and reassign integer ranks 1..N to keep simplicity.
+    // But per your spec, we should preserve fractional sorts (allows inserting many times).
+    // We'll keep the fractional sort but if differences very small we may renormalize.
+    const dataWithSizes = recomputeGroupSizes(newData);
+    setDataSource(dataWithSizes);
+    // setDataSource(() => {
+    //   // Ensure stable: return array sorted by sort
+    //   const arr = [...newData].sort((a, b) => a.sort - b.sort);
+    //   // Optional reindex to 1..N to avoid floats growing small: comment/uncomment depending preference
+    //   // const reindexed = arr.map((r, idx) => ({ ...r, sort: idx + 1 }));
+    //   // return reindexed;
+    //   return arr;
+    // });
   };
 
-  // Columns: use onCell to set rowSpan for group merge, and render DragHandle only on group header
-  const columns: ColumnsType<RowItem> = [
+  // Columns with onCell rowSpan and render for handle only on group header
+  const columns = [
     {
       title: "拖动",
-      width: 60,
-      render: (_, record) => (record.groupSize ? <DragHandle /> : null),
-      onCell: (_, index) => {
+      width: 64,
+      render: (_: any, record: RowItem) =>
+        record.groupSize ? <DragHandle /> : null,
+      onCell: (_: any, index: number) => {
         const rec = sortedData[index];
         return { rowSpan: rec.groupSize || 0 };
       },
@@ -525,43 +576,29 @@ const TableWithGroupAndRowDrag: React.FC = () => {
     {
       title: "组",
       dataIndex: "category",
-      width: 120,
-      onCell: (_, index) => {
+      width: 140,
+      onCell: (_: any, index: number) => {
         const rec = sortedData[index];
         return { rowSpan: rec.groupSize || 0 };
       },
     },
     { title: "名称", dataIndex: "name" },
-    { title: "数量", dataIndex: "count", width: 100 },
+    { title: "数量", dataIndex: "count", width: 120 },
   ];
 
   return (
-    <div style={{ padding: 16 }}>
-      <h3>AntD Table - 组拖动 + 单行拖动 + 合并行（最终版）</h3>
+    <div style={{ padding: 20 }}>
+      <h3>
+        AntD Table — 豪华版：组拖动 + 单行拖动 + 合并行 + 指示线 + 自动滚动 +
+        sort 算法
+      </h3>
 
       <DndContext
         sensors={sensors}
         modifiers={[restrictToVerticalAxis]}
         onDragStart={onDragStart}
+        onDragMove={onDragMove}
         onDragEnd={onDragEnd}
-        onDragMove={(e) => {
-          autoScroll(e);
-          const overId = e.over?.id ? String(e.over.id) : null;
-
-          if (!overId) {
-            setIndicatorPos(null);
-            return;
-          }
-
-          if (overId.startsWith("row:")) {
-            setIndicatorPos({
-              key: overId.replace("row:", ""),
-              type: "before",
-            });
-          } else {
-            setIndicatorPos(null);
-          }
-        }}
       >
         <SortableContext
           items={sortableItems}
@@ -574,25 +611,20 @@ const TableWithGroupAndRowDrag: React.FC = () => {
             dataSource={sortedData}
             pagination={false}
             bordered
-            style={{ width: 800 }}
+            style={{ width: 900 }}
             onRow={(record) =>
               ({ record, activeId, "data-row-key": record.key } as any)
             }
-            rowClassName={(record) => {
-              if (
-                indicatorPos?.key === record.key &&
-                indicatorPos.type === "before"
-              ) {
-                return "drop-indicator-row";
-              }
-              return "";
-            }}
+            rowClassName={(record) =>
+              indicatorPos?.key === record.key && indicatorPos.type === "before"
+                ? "drop-indicator-row"
+                : ""
+            }
           />
         </SortableContext>
 
         {createPortal(
           <DragOverlay
-            className="dnd-overlay-animate"
             dropAnimation={{
               sideEffects: defaultDropAnimationSideEffects({
                 styles: { active: { opacity: "0.0" } },
@@ -604,6 +636,42 @@ const TableWithGroupAndRowDrag: React.FC = () => {
           document.body
         )}
       </DndContext>
+
+      {/* ===== CSS (局部内嵌，推荐搬到全局样式文件) ===== */}
+      <style>{`
+        /* row hover */
+        .ant-table-tbody > tr:hover td {
+          background: #f5fbff !important;
+          transition: all 0.18s ease;
+        }
+        /* drag handle hover */
+        .drag-handle:hover {
+          transform: scale(1.07);
+          filter: drop-shadow(0 4px 8px rgba(24,144,255,0.12));
+        }
+        /* group dragging placeholder (original rows) */
+        tr.group-dragging td {
+          background: rgba(24,144,255,0.04) !important;
+          transition: all 0.12s ease;
+          border-left: 4px solid rgba(24,144,255,0.18);
+        }
+        /* drop indicator */
+        .drop-indicator-row td {
+          border-top: 3px solid #1677ff !important;
+          animation: dropBlink 0.6s linear infinite alternate;
+        }
+        @keyframes dropBlink {
+          0% { border-color: #1677ff; }
+          100% { border-color: #69c0ff; }
+        }
+        /* overlay look */
+        .dnd-overlay-animate {
+          transform: scale(1.02);
+          box-shadow: 0 16px 36px rgba(15, 37, 71, 0.18);
+          border-radius: 6px;
+          transition: all 0.12s ease;
+        }
+      `}</style>
     </div>
   );
 };
